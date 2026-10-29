@@ -1,0 +1,21 @@
+# JavaScript
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Laravel
+backend/vendor/
+backend/node_modules/
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/storage/*.key
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
