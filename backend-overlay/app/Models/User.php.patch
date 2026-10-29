@@ -1,0 +1,7 @@
+// Merge into generated app/Models/User.php; do not replace the full file.
+// Add import: use Laravel\Sanctum\HasApiTokens;
+// Add HasApiTokens to the model's existing traits.
+// Add this relationship inside User:
+// public function studyTasks(): \Illuminate\Database\Eloquent\Relations\HasMany
+// { return $this->hasMany(\App\Models\StudyTask::class); }
+// Keep the generated model's existing traits, fillable/hidden/casts, and password hashing behavior.
