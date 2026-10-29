@@ -14,16 +14,18 @@ Open PowerShell in the repository root:
 Vite runs at http://localhost:5173. Change VITE_API_BASE_URL in frontend/.env if the API uses another URL.
 
 ## Backend
-Laravel framework files and vendor dependencies are generated locally rather than vendored into Git:
-    composer create-project laravel/laravel backend "^12.0"
-    cd backend
-    php artisan install:api
+Laravel framework files and vendor dependencies are generated locally rather than vendored into Git. From the repository root, run this helper to generate Laravel 12, install Sanctum, copy the API source, merge the User model changes, and copy the feature tests:
+
+    Set-ExecutionPolicy -Scope Process Bypass
+    .\scripts\setup-backend.ps1
 
 Create a MySQL database named studyos. Configure backend/.env with DB_CONNECTION=mysql, DB_HOST=127.0.0.1, DB_PORT=3306, DB_DATABASE=studyos, and your local credentials. Never commit .env.
 
-Copy the files in backend-overlay/ into matching paths inside backend/, replacing routes/api.php. Merge backend-overlay/app/Models/User.php.patch into the generated User model; do not replace the generated file. Then run:
+Then run these commands from the backend directory:
+
     php artisan migrate
     php artisan route:list --path=api
+    php artisan test
     php artisan serve
 
 The default API URL is http://127.0.0.1:8000/api.
