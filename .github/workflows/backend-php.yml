@@ -1,0 +1,20 @@
+name: Backend PHP syntax
+on:
+  push:
+    paths:
+      - "backend-overlay/**"
+      - ".github/workflows/backend-php.yml"
+  pull_request:
+    paths:
+      - "backend-overlay/**"
+      - ".github/workflows/backend-php.yml"
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+      - name: Lint Laravel source and tests
+        run: find backend-overlay -name '*.php' -print0 | xargs -0 -n1 php -l
