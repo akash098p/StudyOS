@@ -40,8 +40,8 @@ Copy-Item (Join-Path $testsSource '*.php') $testsTarget -Force
 
 $userPath = Join-Path $backend 'app/Models/User.php'
 $userCode = [System.IO.File]::ReadAllText($userPath)
-if ($userCode -notmatch 'use Laravel\Sanctum\HasApiTokens;') {
-    $userCode = $userCode -replace 'namespace App\Models;\r?\n', ('namespace App\Models;' + [Environment]::NewLine + [Environment]::NewLine + 'use Laravel\Sanctum\HasApiTokens;' + [Environment]::NewLine)
+if ($userCode -notlike '*use Laravel\Sanctum\HasApiTokens;*') {
+    $userCode = $userCode.Replace('namespace App\Models;', ('namespace App\Models;' + [Environment]::NewLine + [Environment]::NewLine + 'use Laravel\Sanctum\HasApiTokens;' + [Environment]::NewLine))
 }
 if ($userCode -notmatch 'use HasApiTokens') {
     $userCode = $userCode -replace 'use HasFactory,\s*Notifiable;', 'use HasApiTokens, HasFactory, Notifiable;'
