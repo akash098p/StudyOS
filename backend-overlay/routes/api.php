@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\StudyTaskController;
+use App\Http\Controllers\Api\StudySubjectController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('auth')->group(function (): void {
@@ -14,4 +15,7 @@ Route::prefix('auth')->group(function (): void {
 });
 Route::middleware('auth:sanctum')->group(function (): void {
     Route::apiResource('tasks', StudyTaskController::class)->only(['index', 'store', 'update', 'destroy']);
+    Route::get('/subjects', [StudySubjectController::class, 'index']);
+    Route::post('/subjects', [StudySubjectController::class, 'store']);
+    Route::delete('/subjects/{subject}', [StudySubjectController::class, 'destroy']);
 });
