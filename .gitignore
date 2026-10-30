@@ -1,17 +1,17 @@
-# JavaScript
+# Dependencies and build output
 frontend/node_modules/
 frontend/dist/
 frontend/.env
 frontend/.env.*
 !frontend/.env.example
 
-# Laravel
-backend/vendor/
-backend/node_modules/
-backend/.env
-backend/.env.*
-!backend/.env.example
-backend/storage/*.key
+# TypeScript build cache
+frontend/tsconfig.tsbuildinfo
+
+# Laravel backend is generated locally by scripts/setup-backend.ps1
+# (composer create-project laravel/laravel + overlay from backend-overlay/).
+# The API source that is versioned lives in backend-overlay/.
+backend/
 
 # Editors and OS
 .vscode/
