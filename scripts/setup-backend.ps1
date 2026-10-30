@@ -49,6 +49,35 @@ if ($userCode -notlike '*use Laravel\Sanctum\HasApiTokens;*') {
 if ($userCode -notmatch 'use HasApiTokens') {
     $userCode = $userCode -replace 'use HasFactory,\s*Notifiable;', 'use HasApiTokens, HasFactory, Notifiable;'
 }
+if ($userCode -notmatch 'function studySubjects\(') {
+    $subjectRelationship = @'
+    public function studySubjects(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\StudySubject::class);
+    }
+'@
+    $subjectRelationship = [Environment]::NewLine + $subjectRelationship + [Environment]::NewLine
+    $userCode = [regex]::Replace($userCode, '(?m)^}\s*
+    $relationship = @'
+    public function studyTasks(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\StudyTask::class);
+    }
+'@
+    $relationship = [Environment]::NewLine + $relationship + [Environment]::NewLine
+    $userCode = [regex]::Replace($userCode, '(?m)^}\s*$', ($relationship + '}'), 1)
+}
+[System.IO.File]::WriteAllText($userPath, $userCode, [System.Text.UTF8Encoding]::new($false))
+
+Write-Host ''
+Write-Host 'StudyOS Laravel backend source installed.' -ForegroundColor Green
+Write-Host 'Next: configure backend/.env for your MySQL database, then run:'
+Write-Host '  cd backend'
+Write-Host '  php artisan migrate'
+Write-Host '  php artisan test'
+Write-Host '  php artisan serve'
+, ($subjectRelationship + '}'), 1)
+}
 if ($userCode -notmatch 'function studyTasks\(') {
     $relationship = @'
     public function studyTasks(): \Illuminate\Database\Eloquent\Relations\HasMany
