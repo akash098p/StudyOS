@@ -6,6 +6,7 @@ export type Task = {
   title: string
   subject: string | null
   scheduled_at: string | null
+  estimated_minutes: number
   is_completed: boolean
 }
 async function request<T>(path: string, init: RequestInit = {}, auth = true): Promise<T> {
@@ -55,10 +56,10 @@ export async function logout() {
   }
 }
 export const listTasks = () => request<{ data: Task[] }>('/tasks').then(r => r.data)
-export const createTask = (title: string, subject: string) =>
+export const createTask = (title: string, subject: string, estimated_minutes = 30, scheduled_at: string | null = null) =>
   request<{ data: Task }>('/tasks', {
     method: 'POST',
-    body: JSON.stringify({ title, subject }),
+    body: JSON.stringify({ title, subject, estimated_minutes, scheduled_at }),
   }).then(r => r.data)
 export const updateTask = (id: number, is_completed: boolean) =>
   request<{ data: Task }>('/tasks/' + id, {
