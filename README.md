@@ -71,15 +71,17 @@ php artisan serve
 ```
 Laravel serves the API at `http://127.0.0.1:8000`.
 
-## Open in browser (instant)
+## Open in browser (instant one-click launcher)
 
-Once the dev servers are running, double-click:
+Double-click:
 
 ```powershell
 .\scripts\open-browser.bat
 ```
 
-This opens `http://localhost:5173` (frontend) in your default browser.
+This starts the Laravel backend (`php artisan serve`), starts the Vite frontend
+(`npm run dev`), waits for them to boot, then opens `http://localhost:5173` in
+your default browser. Keep the command windows open while developing.
 
 ## API endpoints
 | Method | Endpoint | Auth | Description |
