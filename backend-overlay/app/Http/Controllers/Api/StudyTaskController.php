@@ -20,6 +20,7 @@ class StudyTaskController extends Controller
             'title' => ['required', 'string', 'max:180'],
             'subject' => ['nullable', 'string', 'max:100'],
             'scheduled_at' => ['nullable', 'date'],
+            'estimated_minutes' => ['sometimes', 'integer', 'min:1', 'max:1440'],
             'is_completed' => ['sometimes', 'boolean'],
         ]);
         return response()->json(['data' => $request->user()->studyTasks()->create($data)], 201);
@@ -32,6 +33,7 @@ class StudyTaskController extends Controller
             'title' => ['sometimes', 'required', 'string', 'max:180'],
             'subject' => ['sometimes', 'nullable', 'string', 'max:100'],
             'scheduled_at' => ['sometimes', 'nullable', 'date'],
+            'estimated_minutes' => ['sometimes', 'integer', 'min:1', 'max:1440'],
             'is_completed' => ['sometimes', 'boolean'],
         ]));
         return response()->json(['data' => $task->refresh()]);
