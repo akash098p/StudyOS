@@ -25,7 +25,10 @@ $copyMap = @(
     @{ Source = 'app/Http/Controllers/Api/AuthController.php'; Destination = 'app/Http/Controllers/Api/AuthController.php' },
     @{ Source = 'app/Http/Controllers/Api/StudyTaskController.php'; Destination = 'app/Http/Controllers/Api/StudyTaskController.php' },
     @{ Source = 'app/Models/StudyTask.php'; Destination = 'app/Models/StudyTask.php' },
-    @{ Source = 'database/migrations/2026_10_29_000001_create_study_tasks_table.php'; Destination = 'database/migrations/2026_10_29_000001_create_study_tasks_table.php' }
+    @{ Source = 'app/Models/StudySubject.php'; Destination = 'app/Models/StudySubject.php' },
+    @{ Source = 'app/Http/Controllers/Api/StudySubjectController.php'; Destination = 'app/Http/Controllers/Api/StudySubjectController.php' },
+    @{ Source = 'database/migrations/2026_10_29_000001_create_study_tasks_table.php'; Destination = 'database/migrations/2026_10_29_000001_create_study_tasks_table.php' },
+    @{ Source = 'database/migrations/2026_10_30_000002_create_study_subjects_table.php'; Destination = 'database/migrations/2026_10_30_000002_create_study_subjects_table.php' }
 )
 foreach ($item in $copyMap) {
     $target = Join-Path $backend $item.Destination
