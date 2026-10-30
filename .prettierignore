@@ -1,0 +1,10 @@
+node_modules/
+dist/
+build/
+vendor/
+storage/
+bootstrap/cache/
+*.lock
+.env
+.gitignore
+.gitattributes
