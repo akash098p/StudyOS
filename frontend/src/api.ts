@@ -20,3 +20,7 @@ export const listTasks = () => request<{data:Task[]}>('/tasks').then(r=>r.data)
 export const createTask = (title:string,subject:string) => request<{data:Task}>('/tasks',{method:'POST',body:JSON.stringify({title,subject})}).then(r=>r.data)
 export const updateTask = (id:number,is_completed:boolean) => request<{data:Task}>('/tasks/'+id,{method:'PATCH',body:JSON.stringify({is_completed})}).then(r=>r.data)
 export const deleteTask = (id:number) => request<void>('/tasks/'+id,{method:'DELETE'})
+export type Subject = { id:number; name:string; created_at?:string; updated_at?:string }
+export const listSubjects = () => request<{data:Subject[]}>('/subjects').then(r=>r.data)
+export const createSubject = (name:string) => request<{data:Subject}>('/subjects',{method:'POST',body:JSON.stringify({name})}).then(r=>r.data)
+export const deleteSubject = (id:number) => request<void>('/subjects/'+id,{method:'DELETE'})
