@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowUpRight,
   BookOpen,
@@ -51,6 +51,9 @@ function App() {
     [adding, setAdding] = useState(false),
     [title, setTitle] = useState(''),
     [subject, setSubject] = useState('Personal'),
+    [estimatedMinutes, setEstimatedMinutes] = useState('30'),
+    [scheduledAt, setScheduledAt] = useState(''),
+    [notificationsEnabled, setNotificationsEnabled] = useState(typeof Notification !== 'undefined' && Notification.permission === 'granted'),
     [search, setSearch] = useState(''),
     [menu, setMenu] = useState(false),
     [activeTab, setActiveTab] = useState('Overview'),
@@ -63,6 +66,7 @@ function App() {
     [flashRevealed, setFlashRevealed] = useState(false),
     [newSubject, setNewSubject] = useState(''),
     [subjects, setSubjects] = useState<Subject[]>([])
+  const notifiedTasks = useRef<Set<number>>(new Set())
   const refresh = useCallback(async () => setTasks(await api.listTasks()), [])
   const refreshSubjects = useCallback(async () => {
     let saved = await api.listSubjects()
@@ -109,10 +113,61 @@ function App() {
       })
       .finally(() => setLoading(false))
   }, [refresh])
-  function toast(s: string) {
-    setNotice(s)
-    window.setTimeout(() => setNotice(''), 2800)
+  function playChime() {
+    try {
+      const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (!AudioContextClass) return
+      const context = new AudioContextClass()
+      const now = context.currentTime
+      ;[880, 1174, 880].forEach((frequency, index) => {
+        const oscillator = context.createOscillator()
+        const gain = context.createGain()
+        oscillator.type = 'sine'
+        oscillator.frequency.value = frequency
+        gain.gain.setValueAtTime(0.0001, now + index * 0.22)
+        gain.gain.exponentialRampToValueAtTime(0.16, now + index * 0.22 + 0.025)
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + index * 0.22 + 0.2)
+        oscillator.connect(gain)
+        gain.connect(context.destination)
+        oscillator.start(now + index * 0.22)
+        oscillator.stop(now + index * 0.22 + 0.21)
+      })
+      window.setTimeout(() => void context.close(), 1000)
+    } catch {
+      /* Audio may be blocked until the user interacts with the page. */
+    }
   }
+  function toast(s: string, sound = false) {
+    setNotice(s)
+    if (sound) playChime()
+    window.setTimeout(() => setNotice(''), 4200)
+  }
+  async function enableNotifications() {
+    if (!('Notification' in window)) {
+      toast('This browser does not support desktop notifications.')
+      return
+    }
+    const permission = await Notification.requestPermission()
+    setNotificationsEnabled(permission === 'granted')
+    toast(permission === 'granted' ? 'Task reminders are enabled' : 'Allow notifications in your browser settings.')
+  }
+  useEffect(() => {
+    if (!notificationsEnabled) return
+    const checkReminders = () => {
+      const now = Date.now()
+      tasks.forEach(task => {
+        if (task.scheduled_at && !task.is_completed && new Date(task.scheduled_at).getTime() <= now && !notifiedTasks.current.has(task.id)) {
+          notifiedTasks.current.add(task.id)
+          playChime()
+          toast('It is time for: ' + task.title)
+          if (Notification.permission === 'granted') new Notification('StudyOS · Task reminder', { body: task.title + (task.subject ? ' · ' + task.subject : ''), tag: 'studyos-task-' + task.id })
+        }
+      })
+    }
+    checkReminders()
+    const id = window.setInterval(checkReminders, 15000)
+    return () => window.clearInterval(id)
+  }, [notificationsEnabled, tasks])
   useEffect(() => {
     if (!timerRunning) return
     const id = window.setInterval(
@@ -120,6 +175,7 @@ function App() {
         setTimerSeconds(s => {
           if (s <= 1) {
             setTimerRunning(false)
+            playChime()
             toast(
               timerMode === 'Focus'
                 ? 'Focus session complete! Take a break.'
@@ -211,9 +267,11 @@ function App() {
     e.preventDefault()
     if (!title.trim()) return
     try {
-      const t = await api.createTask(title.trim(), subject)
+      const t = await api.createTask(title.trim(), subject, Number(estimatedMinutes), scheduledAt || null)
       setTasks(p => [t, ...p])
       setTitle('')
+      setEstimatedMinutes('30')
+      setScheduledAt('')
       setAdding(false)
       toast('Task saved to your workspace')
     } catch (x) {
@@ -461,6 +519,7 @@ function App() {
                           <strong>{t.title}</strong>
                           <div className="task-meta">
                             <span className="subject-chip">{t.subject || 'Personal'}</span>
+                          <span><Clock3 size={12} /> {t.estimated_minutes || 30} min estimated</span>
                             <span>
                               <Clock3 size={12} />
                               {t.scheduled_at
@@ -503,7 +562,7 @@ function App() {
                       <h3>Focus session</h3>
                       <p>Protect a little time for yourself.</p>
                     </div>
-                    <span className="live-pill">POMODORO</span>
+                    <button type="button" className="live-pill notification-toggle" onClick={() => void enableNotifications()}>{notificationsEnabled ? 'REMINDERS ON' : 'ENABLE REMINDERS'}</button>
                   </div>
                   <div className="focus-visual">
                     <div className="focus-ring">
@@ -1051,6 +1110,11 @@ function App() {
                 </option>
               ))}
             </select>
+            <label htmlFor="task-estimate">Estimated time (minutes)</label>
+            <input id="task-estimate" type="number" min="1" max="1440" value={estimatedMinutes} onChange={e => setEstimatedMinutes(e.target.value)} required />
+            <label htmlFor="task-schedule">Remind me at</label>
+            <input id="task-schedule" type="datetime-local" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} />
+            <p className="form-hint">Keep StudyOS open and allow browser notifications for timed reminders.</p>
             <div className="modal-actions">
               <button type="button" className="secondary-button" onClick={() => setAdding(false)}>
                 Cancel
