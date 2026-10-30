@@ -1611,3 +1611,11 @@ button:hover {
 .subjects-panel .learning-card:hover .learning-thumb img {
   transform: scale(1.045);
 }
+
+
+/* Timed reminders and duration estimates */
+.notification-toggle { border: 1px solid #e6defb; cursor: pointer; font: inherit; font-size: 9px; letter-spacing: 0.25px; white-space: nowrap; }
+.form-hint { margin: -4px 0 0; color: #918ba8; font-size: 11px; line-height: 1.5; }
+.toast { animation: toast-enter 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both; border: 1px solid #ffffff24; backdrop-filter: blur(16px); }
+@keyframes toast-enter { from { opacity: 0; transform: translate3d(0, 12px, 0) scale(0.98); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
+@media (max-width: 560px) { .notification-toggle { max-width: 116px; white-space: normal; } }
