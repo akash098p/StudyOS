@@ -1,12 +1,15 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowUpRight,
+  AlertCircle,
+  AlertTriangle,
   BookOpen,
   CalendarDays,
   CheckCircle2,
   Circle,
   Clock3,
   GraduationCap,
+  Info,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -14,11 +17,21 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Sun,
   Target,
   X,
+  Volume2,
+  VolumeX,
+  Moon,
 } from 'lucide-react'
 import * as api from './api'
 import type { Task, User, Subject } from './api'
+import { ConfirmDialog } from './components/ConfirmDialog'
+import { FlashcardWorkspace } from './components/FlashcardWorkspace'
+import { useSound } from './hooks/useSound'
+
+type ToastType = 'success' | 'warning' | 'error' | 'info'
+type ToastNotice = { id: number; message: string; type: ToastType }
 
 function getSubjectImage(key: string): string {
   if (/(physics|mechanic|electric|electronics)/.test(key)) return 'photo-1636466497217-26a8cbeaf0aa'
@@ -47,7 +60,7 @@ function App() {
     [loading, setLoading] = useState(true),
     [busy, setBusy] = useState(false)
   const [error, setError] = useState(''),
-    [notice, setNotice] = useState(''),
+    [notice, setNotice] = useState<ToastNotice | null>(null),
     [adding, setAdding] = useState(false),
     [title, setTitle] = useState(''),
     [subject, setSubject] = useState('Personal'),
@@ -62,12 +75,38 @@ function App() {
     [timerMode, setTimerMode] = useState<'Focus' | 'Break'>('Focus'),
     [customMinutes, setCustomMinutes] = useState('25'),
     [customSeconds, setCustomSeconds] = useState('00'),
-    [flashIndex, setFlashIndex] = useState(0),
-    [flashRevealed, setFlashRevealed] = useState(false),
     [newSubject, setNewSubject] = useState(''),
     [subjects, setSubjects] = useState<Subject[]>([])
-  const notifiedTasks = useRef<Set<number>>(new Set())
+  const sound = useSound()
+  const soundRef = useRef(sound)
+  soundRef.current = sound
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      return localStorage.getItem('studyos.theme') === 'dark' ? 'dark' : 'light'
+    } catch {
+      return 'light'
+    }
+  })
+  const [confirmDeleteTask, setConfirmDeleteTask] = useState<Task | null>(null)
+  const [confirmRemoveSubject, setConfirmRemoveSubject] = useState<Subject | null>(null)
+  const [confirmSignout, setConfirmSignout] = useState(false)
+  const notifiedTasks = useRef<Set<string>>(new Set())
+  const toastSequence = useRef(0)
+  const toastTimer = useRef<number | null>(null)
   const refresh = useCallback(async () => setTasks(await api.listTasks()), [])
+  useEffect(() => {
+    try {
+      localStorage.setItem('studyos.theme', theme)
+    } catch {
+      // Theme selection remains active for the current session when storage is unavailable.
+    }
+  }, [theme])
+  useEffect(
+    () => () => {
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current)
+    },
+    []
+  )
   const refreshSubjects = useCallback(async () => {
     let saved = await api.listSubjects()
     if (saved.length === 0) {
@@ -113,59 +152,71 @@ function App() {
       })
       .finally(() => setLoading(false))
   }, [refresh])
-  function playChime() {
-    try {
-      const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-      if (!AudioContextClass) return
-      const context = new AudioContextClass()
-      const now = context.currentTime
-      ;[880, 1174, 880].forEach((frequency, index) => {
-        const oscillator = context.createOscillator()
-        const gain = context.createGain()
-        oscillator.type = 'sine'
-        oscillator.frequency.value = frequency
-        gain.gain.setValueAtTime(0.0001, now + index * 0.22)
-        gain.gain.exponentialRampToValueAtTime(0.16, now + index * 0.22 + 0.025)
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + index * 0.22 + 0.2)
-        oscillator.connect(gain)
-        gain.connect(context.destination)
-        oscillator.start(now + index * 0.22)
-        oscillator.stop(now + index * 0.22 + 0.21)
-      })
-      window.setTimeout(() => void context.close(), 1000)
-    } catch {
-      /* Audio may be blocked until the user interacts with the page. */
-    }
+  function dismissToast() {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current)
+    toastTimer.current = null
+    setNotice(null)
   }
-  function toast(s: string, sound = false) {
-    setNotice(s)
-    if (sound) playChime()
-    window.setTimeout(() => setNotice(''), 4200)
+  function toast(message: string, type: ToastType = 'info', playSound = true) {
+    const id = ++toastSequence.current
+    setNotice({ id, message, type })
+    if (playSound && type !== 'info') soundRef.current.play(type)
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => {
+      setNotice(current => (current?.id === id ? null : current))
+      toastTimer.current = null
+    }, 4200)
   }
   async function enableNotifications() {
     if (!('Notification' in window)) {
-      toast('This browser does not support desktop notifications.')
+      toast('This browser does not support desktop notifications.', 'warning')
       return
     }
     const permission = await Notification.requestPermission()
     setNotificationsEnabled(permission === 'granted')
-    toast(permission === 'granted' ? 'Task reminders are enabled' : 'Allow notifications in your browser settings.')
+    toast(
+      permission === 'granted'
+        ? 'Task reminders are enabled'
+        : 'Allow notifications in your browser settings.',
+      permission === 'granted' ? 'success' : 'warning'
+    )
   }
   useEffect(() => {
-    if (!notificationsEnabled) return
     const checkReminders = () => {
       const now = Date.now()
       tasks.forEach(task => {
-        if (task.scheduled_at && !task.is_completed && new Date(task.scheduled_at).getTime() <= now && !notifiedTasks.current.has(task.id)) {
-          notifiedTasks.current.add(task.id)
-          playChime()
-          toast('It is time for: ' + task.title)
-          if (Notification.permission === 'granted') new Notification('StudyOS · Task reminder', { body: task.title + (task.subject ? ' · ' + task.subject : ''), tag: 'studyos-task-' + task.id })
+        const scheduledTime = task.scheduled_at ? Date.parse(task.scheduled_at) : NaN
+        if (!Number.isFinite(scheduledTime) || task.is_completed) return
+
+        const notify = (kind: 'start' | 'time-up') => {
+          const reminderKey = `${task.id}:${kind}`
+          if (notifiedTasks.current.has(reminderKey)) return
+          notifiedTasks.current.add(reminderKey)
+          if (kind === 'start') {
+            soundRef.current.playTaskReminder()
+            toast('Task starting now: ' + task.title, 'warning', false)
+          } else {
+            soundRef.current.playTaskTimeUp()
+            toast('Estimated time is up for: ' + task.title, 'warning', false)
+          }
+          if (notificationsEnabled && Notification.permission === 'granted') {
+            new Notification(
+              kind === 'start' ? 'StudyOS · Task starting' : 'StudyOS · Time is up',
+              {
+                body: task.title + (task.subject ? ' · ' + task.subject : ''),
+                tag: `studyos-task-${task.id}-${kind}`,
+              }
+            )
+          }
         }
+
+        if (scheduledTime <= now) notify('start')
+        const estimatedEnd = scheduledTime + task.estimated_minutes * 60_000
+        if (task.estimated_minutes > 0 && estimatedEnd <= now) notify('time-up')
       })
     }
     checkReminders()
-    const id = window.setInterval(checkReminders, 15000)
+    const id = window.setInterval(checkReminders, 1000)
     return () => window.clearInterval(id)
   }, [notificationsEnabled, tasks])
   useEffect(() => {
@@ -175,11 +226,13 @@ function App() {
         setTimerSeconds(s => {
           if (s <= 1) {
             setTimerRunning(false)
-            playChime()
+            if (timerMode === 'Focus') soundRef.current.playFocusComplete()
             toast(
               timerMode === 'Focus'
                 ? 'Focus session complete! Take a break.'
-                : 'Break complete! Ready to focus?'
+                : 'Break complete! Ready to focus?',
+              'success',
+              timerMode !== 'Focus'
             )
             return 0
           }
@@ -207,13 +260,13 @@ function App() {
     const mins = Math.min(599, Math.max(0, Number(customMinutes) || 0)),
       secs = Math.min(59, Math.max(0, Number(customSeconds) || 0))
     if (mins === 0 && secs === 0) {
-      toast('Choose a timer duration greater than zero.')
+      toast('Choose a timer duration greater than zero.', 'warning')
       return
     }
     setTimerMode('Focus')
     setTimerSeconds(mins * 60 + secs)
     setTimerRunning(false)
-    toast('Custom focus duration set')
+    toast('Custom focus duration set', 'success')
   }
   async function authSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -233,7 +286,7 @@ function App() {
       setUser(u)
       setAuth(false)
       await Promise.all([refresh(), refreshSubjects()])
-      toast('Welcome to your learning space')
+      toast('Welcome to your learning space', 'success')
     } catch (x) {
       setError(x instanceof Error ? x.message : 'Unable to authenticate')
     } finally {
@@ -248,19 +301,25 @@ function App() {
       const created = await api.createSubject(name)
       setSubjects(p => [...p, created].sort((a, b) => a.name.localeCompare(b.name)))
       setNewSubject('')
-      toast('Subject saved to your account')
+      toast('Subject saved to your account', 'success')
     } catch (x) {
-      toast(x instanceof Error ? x.message : 'Could not save subject')
+      toast(x instanceof Error ? x.message : 'Could not save subject', 'error')
     }
   }
   async function removeSubject(s: Subject) {
-    if (!window.confirm('Remove this subject? Existing tasks are retained.')) return
+    setConfirmRemoveSubject(s)
+  }
+
+  async function confirmRemoveSubjectAction() {
+    if (!confirmRemoveSubject) return
     try {
-      await api.deleteSubject(s.id)
-      setSubjects(p => p.filter(v => v.id !== s.id))
-      toast('Subject removed')
+      await api.deleteSubject(confirmRemoveSubject.id)
+      setSubjects(p => p.filter(v => v.id !== confirmRemoveSubject!.id))
+      setConfirmRemoveSubject(null)
+      toast('Subject removed', 'success')
     } catch (x) {
-      toast(x instanceof Error ? x.message : 'Could not remove subject')
+      setConfirmRemoveSubject(null)
+      toast(x instanceof Error ? x.message : 'Could not remove subject', 'error')
     }
   }
   async function add(e: FormEvent) {
@@ -273,9 +332,9 @@ function App() {
       setEstimatedMinutes('30')
       setScheduledAt('')
       setAdding(false)
-      toast('Task saved to your workspace')
+      toast('Task saved to your workspace', 'success')
     } catch (x) {
-      toast(x instanceof Error ? x.message : 'Could not save task')
+      toast(x instanceof Error ? x.message : 'Could not save task', 'error')
     }
   }
   async function toggle(t: Task) {
@@ -283,17 +342,23 @@ function App() {
       const next = await api.updateTask(t.id, !t.is_completed)
       setTasks(p => p.map(v => (v.id === t.id ? next : v)))
     } catch (x) {
-      toast(x instanceof Error ? x.message : 'Could not update task')
+      toast(x instanceof Error ? x.message : 'Could not update task', 'error')
     }
   }
   async function remove(t: Task) {
-    if (!window.confirm('Delete this task?')) return
+    setConfirmDeleteTask(t)
+  }
+
+  async function confirmDeleteTaskAction() {
+    if (!confirmDeleteTask) return
     try {
-      await api.deleteTask(t.id)
-      setTasks(p => p.filter(v => v.id !== t.id))
-      toast('Task deleted')
+      await api.deleteTask(confirmDeleteTask.id)
+      setTasks(p => p.filter(v => v.id !== confirmDeleteTask!.id))
+      setConfirmDeleteTask(null)
+      toast('Task deleted', 'success')
     } catch (x) {
-      toast(x instanceof Error ? x.message : 'Could not delete task')
+      setConfirmDeleteTask(null)
+      toast(x instanceof Error ? x.message : 'Could not delete task', 'error')
     }
   }
   async function signout() {
@@ -303,6 +368,7 @@ function App() {
     setSubjects([])
     setAuth(true)
     setMode('login')
+    setConfirmSignout(false)
   }
   const visible = tasks.filter(t =>
       (t.title + ' ' + (t.subject || '')).toLowerCase().includes(search.toLowerCase())
@@ -318,7 +384,7 @@ function App() {
       </div>
     )
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${theme === 'dark' ? 'dark-theme' : ''}`}>
       <aside className={'sidebar ' + (menu ? 'sidebar-open' : '')}>
         <div className="brand">
           <div className="brand-mark">
@@ -334,7 +400,7 @@ function App() {
         <div className="workspace-label">YOUR WORKSPACE</div>
         <nav className="main-nav">
           <button
-            className={'nav-item ' + (activeTab !== 'Overview' ? 'active' : '')}
+            className={'nav-item ' + (activeTab === 'Overview' ? 'active' : '')}
             onClick={() => selectTab('Overview')}
           >
             <LayoutDashboard />
@@ -370,7 +436,10 @@ function App() {
               <p>Your learning journey, all in one place.</p>
             </div>
           </div>
-          <button className="nav-item" onClick={() => selectTab('Account & privacy')}>
+          <button
+            className={'nav-item ' + (activeTab === 'Account & privacy' ? 'active' : '')}
+            onClick={() => selectTab('Account & privacy')}
+          >
             <ShieldCheck />
             <span>Account & privacy</span>
           </button>
@@ -380,7 +449,7 @@ function App() {
               <strong>{user?.name}</strong>
               <span>{user?.email}</span>
             </div>
-            <button className="icon-button" title="Sign out" onClick={signout}>
+            <button className="icon-button" title="Sign out" onClick={() => setConfirmSignout(true)}>
               <LogOut size={16} />
             </button>
           </div>
@@ -403,14 +472,14 @@ function App() {
               <input
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Search your tasks…"
+                placeholder="Search…"
               />
             </label>
             <div className="top-avatar">{user?.name.slice(0, 1).toUpperCase()}</div>
           </div>
         </header>
         <div className="page-wrap">
-          <section className="welcome-row">
+          <section className={`welcome-row ${activeTab !== 'Overview' ? 'welcome-row-feature' : ''}`}>
             <div>
               <div className="eyebrow">
                 <Sparkles size={14} /> YOUR PERSONAL STUDY SPACE
@@ -562,7 +631,7 @@ function App() {
                       <h3>Focus session</h3>
                       <p>Protect a little time for yourself.</p>
                     </div>
-                    <button type="button" className="live-pill notification-toggle" onClick={() => void enableNotifications()}>{notificationsEnabled ? 'REMINDERS ON' : 'ENABLE REMINDERS'}</button>
+                    <button type="button" className="live-pill notification-toggle" onClick={() => void enableNotifications()}>{notificationsEnabled ? 'BROWSER ALERTS ON' : 'ENABLE BROWSER ALERTS'}</button>
                   </div>
                   <div className="focus-visual">
                     <div className="focus-ring">
@@ -884,65 +953,12 @@ function App() {
                 </div>
               )}
               {activeTab === 'Flashcards' && (
-                <div className="panel flashcard-workspace">
-                  <div className="panel-heading">
-                    <div>
-                      <h3>Computer science starter deck</h3>
-                      <p>Tap the card to reveal the answer.</p>
-                    </div>
-                    <span className="count-pill">{flashIndex + 1} / 4</span>
-                  </div>
-                  <button className="flashcard" onClick={() => setFlashRevealed(v => !v)}>
-                    <span className="modal-kicker">
-                      {flashRevealed ? 'ANSWER' : 'QUESTION'} · TAP TO FLIP
-                    </span>
-                    <strong>
-                      {
-                        (flashRevealed
-                          ? [
-                              'A linear data structure where elements follow FIFO order.',
-                              'A key that uniquely identifies each row in a table.',
-                              'A function solving a problem by calling itself on smaller inputs.',
-                              'A protocol that reliably delivers ordered data between applications.',
-                            ]
-                          : [
-                              'What is a queue?',
-                              'What is a primary key?',
-                              'What is recursion?',
-                              'What does TCP provide?',
-                            ])[flashIndex]
-                      }
-                    </strong>
-                    <span>
-                      {flashRevealed
-                        ? 'Tap to return to the question'
-                        : 'Think of your answer, then reveal'}
-                    </span>
-                  </button>
-                  <div className="flashcard-actions">
-                    <button
-                      className="secondary-button"
-                      onClick={() => {
-                        setFlashIndex(i => (i + 3) % 4)
-                        setFlashRevealed(false)
-                      }}
-                    >
-                      Previous
-                    </button>
-                    <button className="primary-button" onClick={() => setFlashRevealed(v => !v)}>
-                      {flashRevealed ? 'Show question' : 'Reveal answer'}
-                    </button>
-                    <button
-                      className="secondary-button"
-                      onClick={() => {
-                        setFlashIndex(i => (i + 1) % 4)
-                        setFlashRevealed(false)
-                      }}
-                    >
-                      Next card <ArrowUpRight size={14} />
-                    </button>
-                  </div>
-                </div>
+                <FlashcardWorkspace
+                  subjects={subjects}
+                  userId={user?.id ?? 0}
+                  onManageSubjects={() => selectTab('Subjects')}
+                  onFeedback={toast}
+                />
               )}
               {activeTab === 'Account & privacy' && (
                 <div className="panel feature-card settings-card">
@@ -967,7 +983,43 @@ function App() {
                       <span>Task access is scoped to your signed-in account.</span>
                     </div>
                   </div>
-                  <button className="secondary-button" onClick={() => void signout()}>
+                  <div className="settings-preferences">
+                    <div className="settings-preference">
+                      <div>
+                        {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+                        <span>
+                          <strong>Appearance</strong>
+                          <small>{theme === 'light' ? 'Light theme' : 'Dark theme'}</small>
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => setTheme(value => (value === 'light' ? 'dark' : 'light'))}
+                        aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
+                      >
+                        Switch
+                      </button>
+                    </div>
+                    <div className="settings-preference">
+                      <div>
+                        {sound.enabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                        <span>
+                          <strong>Sounds</strong>
+                          <small>{sound.enabled ? 'Success, warning, and error sounds on' : 'Sounds off'}</small>
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => sound.toggle()}
+                        aria-pressed={sound.enabled}
+                      >
+                        {sound.enabled ? 'Turn off' : 'Turn on'}
+                      </button>
+                    </div>
+                  </div>
+                  <button className="secondary-button" onClick={() => setConfirmSignout(true)}>
                     <LogOut size={16} /> Sign out
                   </button>
                 </div>
@@ -976,10 +1028,6 @@ function App() {
           )}
           <footer className="footer">
             <span>© 2026 StudyOS</span>
-            <span>
-              Made for curious minds <b>♥</b>
-            </span>
-            <span>Built with care</span>
           </footer>
         </div>
       </main>
@@ -1114,7 +1162,7 @@ function App() {
             <input id="task-estimate" type="number" min="1" max="1440" value={estimatedMinutes} onChange={e => setEstimatedMinutes(e.target.value)} required />
             <label htmlFor="task-schedule">Remind me at</label>
             <input id="task-schedule" type="datetime-local" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} />
-            <p className="form-hint">Keep StudyOS open and allow browser notifications for timed reminders.</p>
+            <p className="form-hint">Keep StudyOS open to hear reminders. Enable browser notifications for alerts when the app is in the background.</p>
             <div className="modal-actions">
               <button type="button" className="secondary-button" onClick={() => setAdding(false)}>
                 Cancel
@@ -1127,13 +1175,57 @@ function App() {
         </div>
       )}
       {notice && (
-        <div className="toast">
-          <CheckCircle2 size={17} />
-          {notice}
-          <button onClick={() => setNotice('')} aria-label="Dismiss">
+        <div className={`toast toast-${notice.type}`} role="status" aria-live="polite">
+          {notice.type === 'success' ? (
+            <CheckCircle2 size={17} />
+          ) : notice.type === 'warning' ? (
+            <AlertTriangle size={17} />
+          ) : notice.type === 'error' ? (
+            <AlertCircle size={17} />
+          ) : (
+            <Info size={17} />
+          )}
+          <span>{notice.message}</span>
+          <button type="button" onClick={dismissToast} aria-label="Dismiss notification">
             <X size={15} />
           </button>
         </div>
+      )}
+      {confirmDeleteTask && (
+        <ConfirmDialog
+          isOpen={true}
+          title="Delete task"
+          message="Are you sure you want to delete this task?"
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          variant="delete"
+          onConfirm={confirmDeleteTaskAction}
+          onCancel={() => setConfirmDeleteTask(null)}
+        />
+      )}
+      {confirmRemoveSubject && (
+        <ConfirmDialog
+          isOpen={true}
+          title="Remove subject"
+          message="Remove this subject? Existing tasks are retained."
+          confirmLabel="Remove"
+          cancelLabel="Cancel"
+          variant="warning"
+          onConfirm={confirmRemoveSubjectAction}
+          onCancel={() => setConfirmRemoveSubject(null)}
+        />
+      )}
+      {confirmSignout && (
+        <ConfirmDialog
+          isOpen={true}
+          title="Sign out?"
+          message="Are you sure you want to sign out of StudyOS?"
+          confirmLabel="Sign out"
+          cancelLabel="Stay signed in"
+          variant="warning"
+          onConfirm={signout}
+          onCancel={() => setConfirmSignout(false)}
+        />
       )}
     </div>
   )
