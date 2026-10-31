@@ -33,6 +33,10 @@ Then run these commands from the backend directory:
 
 The default API URL is http://127.0.0.1:8000/api.
 
+The API also exposes `GET/POST /focus-sessions` for completed focus timers and `PATCH /study-settings` for the daily study goal. Tasks, priorities, notes, reminders, recurring schedules, and focus history are persisted to the signed-in account. Completing a recurring task creates its next daily or weekly occurrence.
+
+The backend overlay configures PHPUnit to use an in-memory SQLite database, so `php artisan test` does not use or modify the MySQL database configured in `.env`. Browser reminders require StudyOS to remain open; browser notifications can alert in the background when permission is granted.
+
 ## Endpoints
 
 - POST /auth/register: name, email, password, password_confirmation
