@@ -22,12 +22,20 @@ class StudyTaskApiTest extends TestCase
         $user = User::factory()->create();
         Sanctum::actingAs($user);
 
-        $this->postJson('/api/tasks', ['title' => 'Revise linked lists', 'subject' => 'Data Structures'])
+        $this->postJson('/api/tasks', [
+            'title' => 'Revise linked lists',
+            'subject' => 'Data Structures',
+            'estimated_minutes' => 30,
+        ])
             ->assertCreated()
             ->assertJsonPath('data.title', 'Revise linked lists')
+            ->assertJsonPath('data.estimated_minutes', 30)
             ->assertJsonPath('data.is_completed', false);
 
         $task = StudyTask::query()->where('user_id', $user->id)->firstOrFail();
+        $this->patchJson('/api/tasks/'.$task->id, ['estimated_minutes' => 45])
+            ->assertOk()
+            ->assertJsonPath('data.estimated_minutes', 45);
         $this->patchJson('/api/tasks/'.$task->id, ['is_completed' => true])
             ->assertOk()
             ->assertJsonPath('data.is_completed', true);
