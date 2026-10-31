@@ -56,10 +56,20 @@ export async function logout() {
   }
 }
 export const listTasks = () => request<{ data: Task[] }>('/tasks').then(r => r.data)
-export const createTask = (title: string, subject: string, estimated_minutes = 30, scheduled_at: string | null = null) =>
+export const createTask = (
+  title: string,
+  subject: string,
+  estimated_minutes = 30,
+  scheduled_at: string | null = null
+) =>
   request<{ data: Task }>('/tasks', {
     method: 'POST',
-    body: JSON.stringify({ title, subject, estimated_minutes, scheduled_at }),
+    body: JSON.stringify({
+      title,
+      subject,
+      estimated_minutes,
+      scheduled_at: scheduled_at ? new Date(scheduled_at).toISOString() : null,
+    }),
   }).then(r => r.data)
 export const updateTask = (id: number, is_completed: boolean) =>
   request<{ data: Task }>('/tasks/' + id, {
