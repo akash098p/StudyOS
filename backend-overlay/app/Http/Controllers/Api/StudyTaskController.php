@@ -23,6 +23,8 @@ class StudyTaskController extends Controller
             'estimated_minutes' => ['sometimes', 'integer', 'min:1', 'max:1440'],
             'is_completed' => ['sometimes', 'boolean'],
         ]);
+        $data['estimated_minutes'] ??= 30;
+        $data['is_completed'] ??= false;
         return response()->json(['data' => $request->user()->studyTasks()->create($data)], 201);
     }
 
