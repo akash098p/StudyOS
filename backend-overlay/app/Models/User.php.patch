@@ -1,7 +1,9 @@
 // Merge into generated app/Models/User.php; do not replace the full file.
 // Add import: use Laravel\Sanctum\HasApiTokens;
 // Add HasApiTokens to the model's existing traits.
+// Add 'daily_goal_minutes' to the existing fillable list and cast it as an integer.
 // Add this relationship inside User:
 // public function studyTasks(): \Illuminate\Database\Eloquent\Relations\HasMany
 // { return $this->hasMany(\App\Models\StudyTask::class); }
+// Add the matching studySubjects() and focusSessions() HasMany relationships.
 // Keep the generated model's existing traits, fillable/hidden/casts, and password hashing behavior.
