@@ -27,7 +27,7 @@ import {
   Moon,
 } from 'lucide-react'
 import * as api from './api'
-import type { Task, User, Subject } from './api'
+import type { Task, User, Subject, FocusSession, TaskPriority, TaskRecurrence } from './api'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { FlashcardWorkspace } from './components/FlashcardWorkspace'
 import { useSound } from './hooks/useSound'
@@ -40,6 +40,51 @@ function getLocalDateKey(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function normalizeSubjectName(name: string): string {
+  return name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+}
+
+function getSubjectSuggestions(query: string, subjects: Subject[]): Subject[] {
+  const normalizedQuery = normalizeSubjectName(query)
+  if (normalizedQuery.length < 2) return []
+
+  const scoreSubject = (name: string): number => {
+    const normalizedName = normalizeSubjectName(name)
+    if (normalizedName === normalizedQuery) return 100
+    if (normalizedName.startsWith(normalizedQuery)) return 90 - normalizedName.length / 100
+    if (normalizedName.includes(normalizedQuery)) return 80 - normalizedName.length / 100
+
+    const previousRow = Array.from({ length: normalizedQuery.length + 1 }, (_, index) => index)
+    for (let row = 1; row <= normalizedName.length; row += 1) {
+      let diagonal = previousRow[0]
+      previousRow[0] = row
+      for (let column = 1; column <= normalizedQuery.length; column += 1) {
+        const above = previousRow[column]
+        previousRow[column] = Math.min(
+          previousRow[column] + 1,
+          previousRow[column - 1] + 1,
+          diagonal + (normalizedName[row - 1] === normalizedQuery[column - 1] ? 0 : 1)
+        )
+        diagonal = above
+      }
+    }
+
+    const distance = previousRow[normalizedQuery.length]
+    return 60 * (1 - distance / Math.max(normalizedName.length, normalizedQuery.length))
+  }
+
+  return subjects
+    .map(subject => ({ subject, score: scoreSubject(subject.name) }))
+    .filter(match => match.score >= 35)
+    .sort((a, b) => b.score - a.score || a.subject.name.localeCompare(b.subject.name))
+    .slice(0, 4)
+    .map(match => match.subject)
 }
 
 function getSubjectImage(key: string): string {
@@ -75,13 +120,22 @@ function App() {
     [subject, setSubject] = useState('Personal'),
     [estimatedMinutes, setEstimatedMinutes] = useState('30'),
     [scheduledAt, setScheduledAt] = useState(''),
+    [priority, setPriority] = useState<TaskPriority>('medium'),
+    [recurrence, setRecurrence] = useState<TaskRecurrence>('none'),
+    [reminderMinutesBefore, setReminderMinutesBefore] = useState('0'),
     [notificationsEnabled, setNotificationsEnabled] = useState(typeof Notification !== 'undefined' && Notification.permission === 'granted'),
     [search, setSearch] = useState(''),
     [menu, setMenu] = useState(false),
     [activeTab, setActiveTab] = useState('Overview'),
     [timerSeconds, setTimerSeconds] = useState(1500),
+    [timerInitialSeconds, setTimerInitialSeconds] = useState(1500),
     [timerRunning, setTimerRunning] = useState(false),
     [timerMode, setTimerMode] = useState<'Focus' | 'Break'>('Focus'),
+    [focusSubject, setFocusSubject] = useState('Personal'),
+    [focusSessions, setFocusSessions] = useState<FocusSession[]>([]),
+    [goalDraft, setGoalDraft] = useState('120'),
+    [savingGoal, setSavingGoal] = useState(false),
+    [noteDrafts, setNoteDrafts] = useState<Record<number, string>>({}),
     [customMinutes, setCustomMinutes] = useState('25'),
     [customSeconds, setCustomSeconds] = useState('00'),
     [newSubject, setNewSubject] = useState(''),
@@ -104,10 +158,15 @@ function App() {
   const [calendarMonth, setCalendarMonth] = useState(
     () => new Date(new Date().getFullYear(), new Date().getMonth(), 1)
   )
+  const [expandedTaskNotes, setExpandedTaskNotes] = useState<Set<number>>(() => new Set())
   const notifiedTasks = useRef<Set<string>>(new Set())
+  const focusLogged = useRef(false)
   const toastSequence = useRef(0)
   const toastTimer = useRef<number | null>(null)
   const refresh = useCallback(async () => setTasks(await api.listTasks()), [])
+  const refreshFocusSessions = useCallback(async () => {
+    setFocusSessions(await api.listFocusSessions())
+  }, [])
   useEffect(() => {
     try {
       localStorage.setItem('studyos.theme', theme)
@@ -157,7 +216,8 @@ function App() {
       .me()
       .then(async u => {
         setUser(u)
-        await Promise.all([refresh(), refreshSubjects()])
+        setGoalDraft(String(u.daily_goal_minutes || 120))
+        await Promise.all([refresh(), refreshSubjects(), refreshFocusSessions()])
         setAuth(false)
       })
       .catch(() => {
@@ -165,7 +225,7 @@ function App() {
         setAuth(true)
       })
       .finally(() => setLoading(false))
-  }, [refresh])
+  }, [refresh, refreshFocusSessions, refreshSubjects])
   function dismissToast() {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current)
     toastTimer.current = null
@@ -202,11 +262,14 @@ function App() {
         const scheduledTime = task.scheduled_at ? Date.parse(task.scheduled_at) : NaN
         if (!Number.isFinite(scheduledTime) || task.is_completed) return
 
-        const notify = (kind: 'start' | 'time-up') => {
-          const reminderKey = `${task.id}:${kind}`
+        const notify = (kind: 'upcoming' | 'start' | 'time-up') => {
+          const reminderKey = `${task.id}:${task.scheduled_at}:${kind}`
           if (notifiedTasks.current.has(reminderKey)) return
           notifiedTasks.current.add(reminderKey)
-          if (kind === 'start') {
+          if (kind === 'upcoming') {
+            soundRef.current.playTaskReminder()
+            toast('Task coming up: ' + task.title, 'warning', false)
+          } else if (kind === 'start') {
             soundRef.current.playTaskReminder()
             toast('Task starting now: ' + task.title, 'warning', false)
           } else {
@@ -215,7 +278,11 @@ function App() {
           }
           if (notificationsEnabled && Notification.permission === 'granted') {
             new Notification(
-              kind === 'start' ? 'StudyOS · Task starting' : 'StudyOS · Time is up',
+              kind === 'upcoming'
+                ? 'StudyOS · Task coming up'
+                : kind === 'start'
+                  ? 'StudyOS · Task starting'
+                  : 'StudyOS · Time is up',
               {
                 body: task.title + (task.subject ? ' · ' + task.subject : ''),
                 tag: `studyos-task-${task.id}-${kind}`,
@@ -224,6 +291,9 @@ function App() {
           }
         }
 
+        const reminderTime = scheduledTime - task.reminder_minutes_before * 60_000
+        if (task.reminder_minutes_before > 0 && reminderTime <= now && scheduledTime > now)
+          notify('upcoming')
         if (scheduledTime <= now) notify('start')
         const estimatedEnd = scheduledTime + task.estimated_minutes * 60_000
         if (task.estimated_minutes > 0 && estimatedEnd <= now) notify('time-up')
@@ -240,7 +310,18 @@ function App() {
         setTimerSeconds(s => {
           if (s <= 1) {
             setTimerRunning(false)
-            if (timerMode === 'Focus') soundRef.current.playFocusComplete()
+            if (timerMode === 'Focus') {
+              soundRef.current.playFocusComplete()
+              if (!focusLogged.current) {
+                focusLogged.current = true
+                void api
+                  .createFocusSession(Math.max(1, Math.round(timerInitialSeconds / 60)), focusSubject === 'Personal' ? null : focusSubject)
+                  .then(session => setFocusSessions(current => [session, ...current]))
+                  .catch(x =>
+                    toast(x instanceof Error ? x.message : 'Could not save focus session', 'error')
+                  )
+              }
+            }
             toast(
               timerMode === 'Focus'
                 ? 'Focus session complete! Take a break.'
@@ -255,20 +336,30 @@ function App() {
       1000
     )
     return () => window.clearInterval(id)
-  }, [timerRunning, timerMode])
+  }, [timerRunning, timerMode, timerInitialSeconds, focusSubject])
   function selectTab(tab: string) {
     setActiveTab(tab)
     setMenu(false)
   }
   function resetTimer(mode: 'Focus' | 'Break') {
     setTimerMode(mode)
-    setTimerSeconds(
+    const duration =
       mode === 'Focus'
         ? Math.max(1, Number(customMinutes) || 25) * 60 +
             Math.min(59, Math.max(0, Number(customSeconds) || 0))
         : 300
-    )
+    setTimerSeconds(duration)
+    setTimerInitialSeconds(duration)
     setTimerRunning(false)
+    focusLogged.current = false
+  }
+  function toggleTimer() {
+    if (timerSeconds === 0) {
+      resetTimer(timerMode)
+      return
+    }
+    if (!timerRunning) focusLogged.current = false
+    setTimerRunning(running => !running)
   }
   function applyCustomTimer() {
     const mins = Math.min(599, Math.max(0, Number(customMinutes) || 0)),
@@ -279,7 +370,9 @@ function App() {
     }
     setTimerMode('Focus')
     setTimerSeconds(mins * 60 + secs)
+    setTimerInitialSeconds(mins * 60 + secs)
     setTimerRunning(false)
+    focusLogged.current = false
     toast('Custom focus duration set', 'success')
   }
   async function authSubmit(e: FormEvent<HTMLFormElement>) {
@@ -299,7 +392,8 @@ function App() {
           : await api.login(String(f.get('email')), String(f.get('password')))
       setUser(u)
       setAuth(false)
-      await Promise.all([refresh(), refreshSubjects()])
+      setGoalDraft(String(u.daily_goal_minutes || 120))
+      await Promise.all([refresh(), refreshSubjects(), refreshFocusSessions()])
       toast('Welcome to your learning space', 'success')
     } catch (x) {
       setError(x instanceof Error ? x.message : 'Unable to authenticate')
@@ -311,6 +405,14 @@ function App() {
     e.preventDefault()
     const name = newSubject.trim()
     if (!name) return
+    if (
+      subjects.some(
+        existing => normalizeSubjectName(existing.name) === normalizeSubjectName(name)
+      )
+    ) {
+      toast('That subject is already in your list.', 'info', false)
+      return
+    }
     try {
       const created = await api.createSubject(name)
       setSubjects(p => [...p, created].sort((a, b) => a.name.localeCompare(b.name)))
@@ -339,12 +441,27 @@ function App() {
   async function add(e: FormEvent) {
     e.preventDefault()
     if (!title.trim()) return
+    if (recurrence !== 'none' && !scheduledAt) {
+      toast('Set a date and time before making a task repeat.', 'warning')
+      return
+    }
     try {
-      const t = await api.createTask(title.trim(), subject, Number(estimatedMinutes), scheduledAt || null)
+      const t = await api.createTask(
+        title.trim(),
+        subject,
+        Number(estimatedMinutes),
+        scheduledAt || null,
+        priority,
+        recurrence,
+        Number(reminderMinutesBefore)
+      )
       setTasks(p => [t, ...p])
       setTitle('')
       setEstimatedMinutes('30')
       setScheduledAt('')
+      setPriority('medium')
+      setRecurrence('none')
+      setReminderMinutesBefore('0')
       setAdding(false)
       toast('Task saved to your workspace', 'success')
     } catch (x) {
@@ -353,10 +470,65 @@ function App() {
   }
   async function toggle(t: Task) {
     try {
-      const next = await api.updateTask(t.id, !t.is_completed)
-      setTasks(p => p.map(v => (v.id === t.id ? next : v)))
+      const next = await api.updateTask(t.id, { is_completed: !t.is_completed })
+      if (!t.is_completed && t.recurrence !== 'none') {
+        await refresh()
+      } else {
+        setTasks(p => p.map(v => (v.id === t.id ? next : v)))
+      }
     } catch (x) {
       toast(x instanceof Error ? x.message : 'Could not update task', 'error')
+    }
+  }
+  async function moveTaskToToday(task: Task) {
+    if (!task.scheduled_at) return
+    const previousDate = new Date(task.scheduled_at)
+    const newDate = new Date()
+    newDate.setHours(previousDate.getHours(), previousDate.getMinutes(), 0, 0)
+    if (newDate.getTime() <= Date.now()) newDate.setTime(Date.now() + 15 * 60_000)
+    try {
+      const updated = await api.updateTask(task.id, { scheduled_at: newDate.toISOString() })
+      setTasks(current => current.map(item => (item.id === task.id ? updated : item)))
+      toast('Overdue task moved to today', 'success')
+    } catch (x) {
+      toast(x instanceof Error ? x.message : 'Could not reschedule task', 'error')
+    }
+  }
+  async function updateTaskPriority(task: Task, nextPriority: TaskPriority) {
+    try {
+      const updated = await api.updateTask(task.id, { priority: nextPriority })
+      setTasks(current => current.map(item => (item.id === task.id ? updated : item)))
+    } catch (x) {
+      toast(x instanceof Error ? x.message : 'Could not update task priority', 'error')
+    }
+  }
+  async function saveTaskNotes(task: Task) {
+    const notes = noteDrafts[task.id] ?? task.notes ?? ''
+    if (notes === (task.notes ?? '')) return
+    try {
+      const updated = await api.updateTask(task.id, { notes })
+      setTasks(current => current.map(item => (item.id === task.id ? updated : item)))
+      toast('Task notes saved', 'success', false)
+    } catch (x) {
+      toast(x instanceof Error ? x.message : 'Could not save task notes', 'error')
+    }
+  }
+  async function saveDailyGoal() {
+    const minutes = Number(goalDraft)
+    if (!Number.isInteger(minutes) || minutes < 15 || minutes > 1440) {
+      toast('Set a daily study goal between 15 minutes and 24 hours.', 'warning')
+      return
+    }
+    setSavingGoal(true)
+    try {
+      const updatedUser = await api.updateStudyGoal(minutes)
+      setUser(updatedUser)
+      setGoalDraft(String(updatedUser.daily_goal_minutes))
+      toast('Daily study goal saved', 'success')
+    } catch (x) {
+      toast(x instanceof Error ? x.message : 'Could not save daily study goal', 'error')
+    } finally {
+      setSavingGoal(false)
     }
   }
   async function remove(t: Task) {
@@ -393,6 +565,25 @@ function App() {
       (t.title + ' ' + (t.subject || '')).toLowerCase().includes(search.toLowerCase())
   )
   const done = tasks.filter(t => t.is_completed).length
+  const isTaskOverdue = (task: Task) =>
+    !task.is_completed &&
+    Boolean(task.scheduled_at && getLocalDateKey(new Date(task.scheduled_at)) < todayKey)
+  const todayPlannedMinutes = tasks
+    .filter(task => task.scheduled_at && getLocalDateKey(new Date(task.scheduled_at)) === todayKey)
+    .reduce((total, task) => total + (task.estimated_minutes || 0), 0)
+  const todayFocusSessions = focusSessions.filter(
+    session => getLocalDateKey(new Date(session.completed_at)) === todayKey
+  )
+  const todayFocusMinutes = todayFocusSessions.reduce(
+    (total, session) => total + session.duration_minutes,
+    0
+  )
+  const dailyGoalMinutes = user?.daily_goal_minutes || 120
+  const dailyGoalProgress = Math.min(100, Math.round((todayFocusMinutes / dailyGoalMinutes) * 100))
+  const subjectSuggestions = getSubjectSuggestions(newSubject, subjects)
+  const duplicateSubject = subjects.some(
+    existing => normalizeSubjectName(existing.name) === normalizeSubjectName(newSubject.trim())
+  )
   const weekDays = Array.from({ length: 7 }, (_, i) => {
     const date = new Date(today)
     date.setDate(date.getDate() - ((date.getDay() + 6) % 7) + i)
@@ -600,6 +791,52 @@ function App() {
                   </div>
                 </article>
               </section>
+              <section className="panel daily-plan-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h3>Daily study plan</h3>
+                    <p>Track focused time toward your daily goal.</p>
+                  </div>
+                  <Target />
+                </div>
+                <div className="daily-plan-progress">
+                  <div className="daily-plan-progress-track">
+                    <i style={{ width: dailyGoalProgress + '%' }} />
+                  </div>
+                  <div className="daily-plan-metrics">
+                    <span>
+                      <strong>{todayFocusMinutes}</strong> focused min
+                    </span>
+                    <span>
+                      <strong>{todayPlannedMinutes}</strong> planned min
+                    </span>
+                    <span>
+                      Goal: <strong>{dailyGoalMinutes}</strong> min
+                    </span>
+                  </div>
+                </div>
+                <form
+                  className="daily-goal-form"
+                  onSubmit={event => {
+                    event.preventDefault()
+                    void saveDailyGoal()
+                  }}
+                >
+                  <label htmlFor="daily-goal-minutes">Daily goal (minutes)</label>
+                  <input
+                    id="daily-goal-minutes"
+                    type="number"
+                    min="15"
+                    max="1440"
+                    step="15"
+                    value={goalDraft}
+                    onChange={event => setGoalDraft(event.target.value)}
+                  />
+                  <button className="secondary-button" disabled={savingGoal}>
+                    {savingGoal ? 'Saving…' : 'Save goal'}
+                  </button>
+                </form>
+              </section>
               <section className="content-grid">
                 <article className="panel tasks-panel">
                   <div className="panel-heading">
@@ -623,7 +860,16 @@ function App() {
                           <strong>{t.title}</strong>
                           <div className="task-meta">
                             <span className="subject-chip">{t.subject || 'Personal'}</span>
-                          <span><Clock3 size={12} /> {t.estimated_minutes || 30} min estimated</span>
+                            <span className={`priority-badge priority-${t.priority || 'medium'}`}>
+                              {t.priority || 'medium'} priority
+                            </span>
+                            {t.recurrence !== 'none' && (
+                              <span className="recurrence-badge">
+                                Repeats {t.recurrence}
+                              </span>
+                            )}
+                            {isTaskOverdue(t) && <span className="overdue-badge">Overdue</span>}
+                            <span><Clock3 size={12} /> {t.estimated_minutes || 30} min estimated</span>
                             <span>
                               <Clock3 size={12} />
                               {t.scheduled_at
@@ -631,6 +877,69 @@ function App() {
                                 : 'No time set'}
                             </span>
                           </div>
+                          {isTaskOverdue(t) && (
+                            <div className="overdue-task-actions">
+                              <span className="overdue-badge">Overdue</span>
+                              <button
+                                type="button"
+                                className="secondary-button task-reschedule-button"
+                                onClick={() => void moveTaskToToday(t)}
+                              >
+                                Move to today
+                              </button>
+                            </div>
+                          )}
+                          <div className="task-extra-actions">
+                            <label className="priority-select-label">
+                                <span>Priority</span>
+                                <select
+                                  value={t.priority || 'medium'}
+                                  onChange={event =>
+                                    void updateTaskPriority(t, event.target.value as TaskPriority)
+                                  }
+                                  aria-label={`Priority for ${t.title}`}
+                                >
+                                  <option value="low">Low</option>
+                                  <option value="medium">Medium</option>
+                                  <option value="high">High</option>
+                                </select>
+                            </label>
+                            <button
+                                type="button"
+                                className="task-notes-toggle"
+                                aria-expanded={expandedTaskNotes.has(t.id)}
+                                onClick={() =>
+                                  setExpandedTaskNotes(current => {
+                                    const next = new Set(current)
+                                    if (next.has(t.id)) next.delete(t.id)
+                                    else next.add(t.id)
+                                    return next
+                                  })
+                                }
+                            >
+                                {expandedTaskNotes.has(t.id) ? 'Hide notes' : 'Quick notes'}
+                            </button>
+                          </div>
+                          {expandedTaskNotes.has(t.id) && (
+                            <div className="task-notes-editor">
+                                <textarea
+                                  value={noteDrafts[t.id] ?? t.notes ?? ''}
+                                  onChange={event =>
+                                    setNoteDrafts(current => ({ ...current, [t.id]: event.target.value }))
+                                  }
+                                  maxLength={2000}
+                                  placeholder="Add notes or useful links for this task…"
+                                  aria-label={`Notes for ${t.title}`}
+                                />
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void saveTaskNotes(t)}
+                                >
+                                  Save notes
+                                </button>
+                            </div>
+                          )}
                         </div>
                         <button
                           className="delete-button"
@@ -681,6 +990,21 @@ function App() {
                     <span className="focus-star star-one">✦</span>
                     <span className="focus-star star-two">✧</span>
                   </div>
+                  <label className="focus-subject-select">
+                    Study subject
+                    <select
+                      value={focusSubject}
+                      disabled={timerRunning}
+                      onChange={event => setFocusSubject(event.target.value)}
+                    >
+                      <option value="Personal">Personal</option>
+                      {subjects.map(item => (
+                        <option value={item.name} key={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <div className="custom-time-fields dashboard-custom-time">
                     <label>
                       Minutes
@@ -720,9 +1044,7 @@ function App() {
                     </div>
                     <button
                       className="play-button"
-                      onClick={() =>
-                        timerSeconds === 0 ? resetTimer(timerMode) : setTimerRunning(v => !v)
-                      }
+                      onClick={toggleTimer}
                       aria-label={timerRunning ? 'Pause timer' : 'Start timer'}
                     >
                       {timerRunning ? 'Ⅱ' : timerSeconds === 0 ? '↻' : '▶'}
@@ -1027,10 +1349,21 @@ function App() {
                                 ? new Date(t.scheduled_at).toLocaleString()
                                 : 'No due date'}
                             </span>
+                            {isTaskOverdue(t) && <span className="overdue-badge">Overdue</span>}
                           </div>
-                          <button className="secondary-button" onClick={() => void toggle(t)}>
-                            Complete
-                          </button>
+                          <div className="feature-task-actions">
+                            {isTaskOverdue(t) && (
+                              <button
+                                className="secondary-button"
+                                onClick={() => void moveTaskToToday(t)}
+                              >
+                                Move to today
+                              </button>
+                            )}
+                            <button className="secondary-button" onClick={() => void toggle(t)}>
+                              Complete
+                            </button>
+                          </div>
                         </div>
                       ))}
                     {tasks.filter(t => !t.is_completed).length === 0 && (
@@ -1065,11 +1398,24 @@ function App() {
                       {String(Math.floor(timerSeconds / 60)).padStart(2, '0')}:
                       {String(timerSeconds % 60).padStart(2, '0')}
                     </div>
+                    <label className="focus-subject-select">
+                      Study subject
+                      <select
+                        value={focusSubject}
+                        disabled={timerRunning}
+                        onChange={event => setFocusSubject(event.target.value)}
+                      >
+                        <option value="Personal">Personal</option>
+                        {subjects.map(item => (
+                          <option value={item.name} key={item.id}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <button
                       className="primary-button"
-                      onClick={() =>
-                        timerSeconds === 0 ? resetTimer(timerMode) : setTimerRunning(v => !v)
-                      }
+                      onClick={toggleTimer}
                     >
                       {timerRunning
                         ? 'Pause timer'
@@ -1091,13 +1437,50 @@ function App() {
                       <BookOpen />
                     </div>
                     <form className="inline-add" onSubmit={addSubject}>
-                      <input
-                        value={newSubject}
-                        onChange={e => setNewSubject(e.target.value)}
-                        placeholder="Add a subject…"
-                        maxLength={100}
-                      />
-                      <button className="primary-button">
+                      <div className="subject-suggestion-wrap">
+                        <input
+                          value={newSubject}
+                          onChange={e => setNewSubject(e.target.value)}
+                          placeholder="Add a subject…"
+                          maxLength={100}
+                          autoComplete="off"
+                          aria-label="Subject name"
+                          aria-autocomplete="list"
+                          aria-controls="subject-suggestions"
+                        />
+                        {newSubject.trim() && subjectSuggestions.length > 0 && (
+                          <div
+                            className="subject-suggestions"
+                            id="subject-suggestions"
+                            role="listbox"
+                            aria-label="Similar subjects"
+                          >
+                            <span className="subject-suggestions-label">Similar subjects</span>
+                            {subjectSuggestions.map(suggestion => {
+                              const alreadyAdded =
+                                normalizeSubjectName(suggestion.name) === normalizeSubjectName(newSubject.trim())
+                              return (
+                                <button
+                                  type="button"
+                                  role="option"
+                                  aria-selected={alreadyAdded}
+                                  aria-disabled={alreadyAdded}
+                                  className="subject-suggestion"
+                                  key={suggestion.id}
+                                  onClick={() => setNewSubject(suggestion.name)}
+                                >
+                                  <span>{suggestion.name}</span>
+                                  {alreadyAdded && <small>Already added</small>}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        className="primary-button"
+                        disabled={duplicateSubject}
+                      >
                         <Plus size={16} /> Add
                       </button>
                     </form>
@@ -1119,6 +1502,83 @@ function App() {
                         </button>
                       </div>
                     ))}
+                  </article>
+                  <article className="panel feature-card">
+                    <div className="panel-heading">
+                      <div>
+                        <h3>Subject progress</h3>
+                        <p>Completed tasks and focus time from the last 7 days.</p>
+                      </div>
+                      <Target />
+                    </div>
+                    {subjects.length === 0 ? (
+                      <div className="empty-state">
+                        <BookOpen />
+                        <strong>Add a subject to track progress</strong>
+                      </div>
+                    ) : (
+                      subjects.map(item => {
+                        const relatedTasks = tasks.filter(task => task.subject === item.name)
+                        const completedTasks = relatedTasks.filter(task => task.is_completed).length
+                        const taskProgress = relatedTasks.length
+                          ? Math.round((completedTasks / relatedTasks.length) * 100)
+                          : 0
+                        const weekAgo = new Date()
+                        weekAgo.setDate(weekAgo.getDate() - 7)
+                        const weeklyMinutes = focusSessions
+                          .filter(
+                            session =>
+                              session.subject === item.name &&
+                              new Date(session.completed_at) >= weekAgo
+                          )
+                          .reduce((total, session) => total + session.duration_minutes, 0)
+                        return (
+                          <div className="subject-progress-row" key={item.id}>
+                            <div>
+                              <strong>{item.name}</strong>
+                              <span>
+                                {completedTasks}/{relatedTasks.length} tasks · {weeklyMinutes} min
+                                focused this week
+                              </span>
+                            </div>
+                            <div className="learning-progress">
+                              <i style={{ width: taskProgress + '%' }} />
+                            </div>
+                          </div>
+                        )
+                      })
+                    )}
+                  </article>
+                  <article className="panel feature-card">
+                    <div className="panel-heading">
+                      <div>
+                        <h3>Focus session history</h3>
+                        <p>Your completed focus timer sessions.</p>
+                      </div>
+                      <Clock3 />
+                    </div>
+                    {focusSessions.length === 0 ? (
+                      <div className="empty-state">
+                        <Clock3 />
+                        <strong>No focus sessions yet</strong>
+                        <p>Complete a focus timer to start your history.</p>
+                      </div>
+                    ) : (
+                      <div className="focus-session-history">
+                        {focusSessions.slice(0, 10).map(session => (
+                          <div className="focus-session-row" key={session.id}>
+                            <Clock3 />
+                            <div>
+                              <strong>{session.subject || 'Personal'}</strong>
+                              <span>
+                                {session.duration_minutes} min ·{' '}
+                                {new Date(session.completed_at).toLocaleString()}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </article>
                   <article className="panel feature-card tip-card">
                     <Sparkles size={28} />
@@ -1338,9 +1798,44 @@ function App() {
             </select>
             <label htmlFor="task-estimate">Estimated time (minutes)</label>
             <input id="task-estimate" type="number" min="1" max="1440" value={estimatedMinutes} onChange={e => setEstimatedMinutes(e.target.value)} required />
+            <label htmlFor="task-priority">Priority</label>
+            <select
+              id="task-priority"
+              value={priority}
+              onChange={event => setPriority(event.target.value as TaskPriority)}
+            >
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+            <label htmlFor="task-recurrence">Repeat task</label>
+            <select
+              id="task-recurrence"
+              value={recurrence}
+              onChange={event => setRecurrence(event.target.value as TaskRecurrence)}
+            >
+              <option value="none">Does not repeat</option>
+              <option value="daily">Every day</option>
+              <option value="weekly">Every week</option>
+            </select>
             <label htmlFor="task-schedule">Remind me at</label>
             <input id="task-schedule" type="datetime-local" value={scheduledAt} onChange={e => setScheduledAt(e.target.value)} />
-            <p className="form-hint">Keep StudyOS open to hear reminders. Enable browser notifications for alerts when the app is in the background.</p>
+            <label htmlFor="task-reminder-offset">Remind me before</label>
+            <select
+              id="task-reminder-offset"
+              value={reminderMinutesBefore}
+              onChange={event => setReminderMinutesBefore(event.target.value)}
+            >
+              <option value="0">At the scheduled time</option>
+              <option value="5">5 minutes before</option>
+              <option value="10">10 minutes before</option>
+              <option value="15">15 minutes before</option>
+              <option value="30">30 minutes before</option>
+            </select>
+            <p className="form-hint">
+              Repeating tasks need a scheduled date. Keep StudyOS open to hear reminders; enable
+              browser alerts to receive notifications when it is in the background.
+            </p>
             <div className="modal-actions">
               <button type="button" className="secondary-button" onClick={() => setAdding(false)}>
                 Cancel
