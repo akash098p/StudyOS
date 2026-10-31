@@ -1,6 +1,13 @@
 const API = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api'
 const KEY = 'studyos_token'
-export type User = { id: number; name: string; email: string }
+export type User = {
+  id: number
+  name: string
+  email: string
+  daily_goal_minutes: number
+}
+export type TaskPriority = 'low' | 'medium' | 'high'
+export type TaskRecurrence = 'none' | 'daily' | 'weekly'
 export type Task = {
   id: number
   title: string
@@ -8,6 +15,17 @@ export type Task = {
   scheduled_at: string | null
   estimated_minutes: number
   is_completed: boolean
+  priority: TaskPriority
+  notes: string | null
+  recurrence: TaskRecurrence
+  reminder_minutes_before: number
+}
+export type FocusSession = {
+  id: number
+  subject: string | null
+  duration_minutes: number
+  started_at: string
+  completed_at: string
 }
 async function request<T>(path: string, init: RequestInit = {}, auth = true): Promise<T> {
   const headers = new Headers(init.headers)
@@ -56,11 +74,25 @@ export async function logout() {
   }
 }
 export const listTasks = () => request<{ data: Task[] }>('/tasks').then(r => r.data)
+export type TaskChanges = Partial<
+  Pick<
+    Task,
+    | 'is_completed'
+    | 'scheduled_at'
+    | 'priority'
+    | 'notes'
+    | 'recurrence'
+    | 'reminder_minutes_before'
+  >
+>
 export const createTask = (
   title: string,
   subject: string,
   estimated_minutes = 30,
-  scheduled_at: string | null = null
+  scheduled_at: string | null = null,
+  priority: TaskPriority = 'medium',
+  recurrence: TaskRecurrence = 'none',
+  reminder_minutes_before = 0
 ) =>
   request<{ data: Task }>('/tasks', {
     method: 'POST',
@@ -69,12 +101,15 @@ export const createTask = (
       subject,
       estimated_minutes,
       scheduled_at: scheduled_at ? new Date(scheduled_at).toISOString() : null,
+      priority,
+      recurrence,
+      reminder_minutes_before,
     }),
   }).then(r => r.data)
-export const updateTask = (id: number, is_completed: boolean) =>
+export const updateTask = (id: number, changes: TaskChanges) =>
   request<{ data: Task }>('/tasks/' + id, {
     method: 'PATCH',
-    body: JSON.stringify({ is_completed }),
+    body: JSON.stringify(changes),
   }).then(r => r.data)
 export const deleteTask = (id: number) => request<void>('/tasks/' + id, { method: 'DELETE' })
 export type Subject = { id: number; name: string; created_at?: string; updated_at?: string }
@@ -84,3 +119,15 @@ export const createSubject = (name: string) =>
     r => r.data
   )
 export const deleteSubject = (id: number) => request<void>('/subjects/' + id, { method: 'DELETE' })
+export const updateStudyGoal = (daily_goal_minutes: number) =>
+  request<{ user: User }>('/study-settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ daily_goal_minutes }),
+  }).then(r => r.user)
+export const listFocusSessions = () =>
+  request<{ data: FocusSession[] }>('/focus-sessions').then(r => r.data)
+export const createFocusSession = (duration_minutes: number, subject: string | null) =>
+  request<{ data: FocusSession }>('/focus-sessions', {
+    method: 'POST',
+    body: JSON.stringify({ duration_minutes, subject }),
+  }).then(r => r.data)
