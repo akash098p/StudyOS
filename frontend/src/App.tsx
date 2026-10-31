@@ -5,6 +5,8 @@ import {
   AlertTriangle,
   BookOpen,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   Circle,
   Clock3,
@@ -32,6 +34,13 @@ import { useSound } from './hooks/useSound'
 
 type ToastType = 'success' | 'warning' | 'error' | 'info'
 type ToastNotice = { id: number; message: string; type: ToastType }
+
+function getLocalDateKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 
 function getSubjectImage(key: string): string {
   if (/(physics|mechanic|electric|electronics)/.test(key)) return 'photo-1636466497217-26a8cbeaf0aa'
@@ -90,6 +99,11 @@ function App() {
   const [confirmDeleteTask, setConfirmDeleteTask] = useState<Task | null>(null)
   const [confirmRemoveSubject, setConfirmRemoveSubject] = useState<Subject | null>(null)
   const [confirmSignout, setConfirmSignout] = useState(false)
+  const [selectedWeekDay, setSelectedWeekDay] = useState(() => getLocalDateKey(new Date()))
+  const [calendarOpen, setCalendarOpen] = useState(false)
+  const [calendarMonth, setCalendarMonth] = useState(
+    () => new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  )
   const notifiedTasks = useRef<Set<string>>(new Set())
   const toastSequence = useRef(0)
   const toastTimer = useRef<number | null>(null)
@@ -370,10 +384,31 @@ function App() {
     setMode('login')
     setConfirmSignout(false)
   }
-  const visible = tasks.filter(t =>
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const todayKey = getLocalDateKey(today)
+  const visible = tasks.filter(
+    t =>
+      !(t.is_completed && t.scheduled_at && getLocalDateKey(new Date(t.scheduled_at)) < todayKey) &&
       (t.title + ' ' + (t.subject || '')).toLowerCase().includes(search.toLowerCase())
-    ),
-    done = tasks.filter(t => t.is_completed).length
+  )
+  const done = tasks.filter(t => t.is_completed).length
+  const weekDays = Array.from({ length: 7 }, (_, i) => {
+    const date = new Date(today)
+    date.setDate(date.getDate() - ((date.getDay() + 6) % 7) + i)
+    return date
+  })
+  const calendarStart = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)
+  calendarStart.setDate(calendarStart.getDate() - ((calendarStart.getDay() + 6) % 7))
+  const calendarDays = Array.from({ length: 42 }, (_, i) => {
+    const date = new Date(calendarStart)
+    date.setDate(date.getDate() + i)
+    return date
+  })
+  const selectedDayTasks = tasks
+    .filter(task => task.scheduled_at && getLocalDateKey(new Date(task.scheduled_at)) === selectedWeekDay)
+    .sort((a, b) => Date.parse(a.scheduled_at || '') - Date.parse(b.scheduled_at || ''))
+  const selectedDate = new Date(`${selectedWeekDay}T00:00:00`)
   if (loading)
     return (
       <div className="loading">
@@ -702,42 +737,185 @@ function App() {
                       <h3>Your week at a glance</h3>
                       <p>Consistency over perfection.</p>
                     </div>
-                    <CalendarDays />
-                  </div>
-                  <div className="week-strip">
-                    {Array.from({ length: 7 }, (_, i) => {
-                      const d = new Date()
-                      d.setHours(0, 0, 0, 0)
-                      d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + i)
-                      return d
-                    }).map(d => {
-                      const key = d.toLocaleDateString()
-                      const today = new Date().toLocaleDateString()
-                      const count = tasks.filter(
-                        t => t.scheduled_at && new Date(t.scheduled_at).toLocaleDateString() === key
-                      ).length
-                      return (
-                        <div
-                          key={key}
-                          className={'day-cell ' + (key === today ? 'day-active' : '')}
-                        >
-                          <span>
-                            {d.toLocaleDateString('en', { weekday: 'short' }).toUpperCase()}
-                          </span>
-                          <strong>{d.getDate()}</strong>
-                          <i style={{ opacity: count ? 1 : 0.25 }} />
-                        </div>
-                      )
-                    })}
-                  </div>
-                  <div className="week-summary">
-                    <div className="summary-icon">
+                    <button
+                      type="button"
+                      className={'icon-button week-calendar-toggle ' + (calendarOpen ? 'active' : '')}
+                      onClick={() => {
+                        if (!calendarOpen) {
+                          const selected = new Date(`${selectedWeekDay}T00:00:00`)
+                          setCalendarMonth(new Date(selected.getFullYear(), selected.getMonth(), 1))
+                        }
+                        setCalendarOpen(open => !open)
+                      }}
+                      aria-label={calendarOpen ? 'Show week view' : 'Open full calendar'}
+                      aria-expanded={calendarOpen}
+                      aria-controls="week-calendar"
+                    >
                       <CalendarDays />
+                    </button>
+                  </div>
+                  {calendarOpen ? (
+                    <div className="full-calendar" id="week-calendar">
+                      <div className="calendar-month-heading">
+                        <strong>
+                          {calendarMonth.toLocaleDateString('en', {
+                            month: 'long',
+                            year: 'numeric',
+                          })}
+                        </strong>
+                        <div>
+                          <button
+                            type="button"
+                            className="icon-button"
+                            aria-label="Previous month"
+                            onClick={() =>
+                              setCalendarMonth(
+                                month => new Date(month.getFullYear(), month.getMonth() - 1, 1)
+                              )
+                            }
+                          >
+                            <ChevronLeft />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-button"
+                            aria-label="Next month"
+                            onClick={() =>
+                              setCalendarMonth(
+                                month => new Date(month.getFullYear(), month.getMonth() + 1, 1)
+                              )
+                            }
+                          >
+                            <ChevronRight />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="calendar-grid" role="group" aria-label="Select a date">
+                        {weekDays.map(date => (
+                          <span className="calendar-weekday" key={date.getDay()}>
+                            {date.toLocaleDateString('en', { weekday: 'short' }).slice(0, 2)}
+                          </span>
+                        ))}
+                        {calendarDays.map(date => {
+                          const key = getLocalDateKey(date)
+                          const count = tasks.filter(
+                            task =>
+                              task.scheduled_at &&
+                              getLocalDateKey(new Date(task.scheduled_at)) === key
+                          ).length
+                          const isToday = key === getLocalDateKey(today)
+                          const isSelected = key === selectedWeekDay
+                          const isCurrentMonth = date.getMonth() === calendarMonth.getMonth()
+                          return (
+                            <button
+                              type="button"
+                              key={key}
+                              className={[
+                                'calendar-date',
+                                isToday ? 'calendar-date-today' : '',
+                                isSelected ? 'calendar-date-selected' : '',
+                                isCurrentMonth ? '' : 'calendar-date-outside',
+                              ]
+                                .filter(Boolean)
+                                .join(' ')}
+                              onClick={() => {
+                                setSelectedWeekDay(key)
+                                if (!isCurrentMonth) {
+                                  setCalendarMonth(
+                                    new Date(date.getFullYear(), date.getMonth(), 1)
+                                  )
+                                }
+                              }}
+                              aria-pressed={isSelected}
+                              aria-label={`${date.toLocaleDateString('en', {
+                                weekday: 'long',
+                                month: 'long',
+                                day: 'numeric',
+                                year: 'numeric',
+                              })}, ${count} ${count === 1 ? 'task' : 'tasks'}`}
+                            >
+                              <span>{date.getDate()}</span>
+                              <i className={count ? 'has-tasks' : ''} />
+                            </button>
+                          )
+                        })}
+                      </div>
                     </div>
-                    <div>
-                      <strong>You’re finding your rhythm</strong>
-                      <span>Small consistent sessions make a difference.</span>
+                  ) : (
+                    <div className="week-strip">
+                      {weekDays.map(date => {
+                        const key = getLocalDateKey(date)
+                        const count = tasks.filter(
+                          task =>
+                            task.scheduled_at &&
+                            getLocalDateKey(new Date(task.scheduled_at)) === key
+                        ).length
+                        const isToday = key === getLocalDateKey(today)
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            className={
+                              'day-cell ' +
+                              (isToday ? 'day-active ' : '') +
+                              (key === selectedWeekDay ? 'day-selected' : '')
+                            }
+                            onClick={() => setSelectedWeekDay(key)}
+                            aria-pressed={key === selectedWeekDay}
+                            aria-label={`${date.toLocaleDateString('en', {
+                              weekday: 'long',
+                              month: 'long',
+                              day: 'numeric',
+                            })}, ${count} ${count === 1 ? 'task' : 'tasks'}`}
+                          >
+                            <span>
+                              {date.toLocaleDateString('en', { weekday: 'short' }).toUpperCase()}
+                            </span>
+                            <strong>{date.getDate()}</strong>
+                            <i style={{ opacity: count ? 1 : 0.25 }} />
+                          </button>
+                        )
+                      })}
                     </div>
+                  )}
+                  <div className="week-history-heading">
+                    <strong>
+                      {selectedDate.toLocaleDateString('en', {
+                        weekday: 'long',
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </strong>
+                    <span>{selectedDayTasks.length} {selectedDayTasks.length === 1 ? 'task' : 'tasks'}</span>
+                  </div>
+                  <div className="week-history-list" role="list" aria-label="Tasks for selected day">
+                    {selectedDayTasks.length ? (
+                      selectedDayTasks.map(task => (
+                        <div
+                          className={'week-history-item ' + (task.is_completed ? 'task-done' : '')}
+                          key={task.id}
+                          role="listitem"
+                        >
+                          {task.is_completed ? <CheckCircle2 /> : <Circle />}
+                          <div>
+                            <strong>{task.title}</strong>
+                            <span>
+                              {task.subject || 'Personal'} · {task.estimated_minutes || 30} min
+                            </span>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="week-history-empty">
+                        <div className="summary-icon">
+                          <CalendarDays />
+                        </div>
+                        <div>
+                          <strong>You’re finding your rhythm</strong>
+                          <span>No tasks scheduled for this day.</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </article>
                 <article className="panel subjects-panel">
