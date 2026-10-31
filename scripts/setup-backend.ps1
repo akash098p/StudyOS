@@ -24,13 +24,24 @@ $copyMap = @(
     @{ Source = 'routes/api.php'; Destination = 'routes/api.php' },
     @{ Source = 'app/Http/Controllers/Api/AuthController.php'; Destination = 'app/Http/Controllers/Api/AuthController.php' },
     @{ Source = 'app/Http/Controllers/Api/StudyTaskController.php'; Destination = 'app/Http/Controllers/Api/StudyTaskController.php' },
+    @{ Source = 'app/Http/Controllers/Api/FocusSessionController.php'; Destination = 'app/Http/Controllers/Api/FocusSessionController.php' },
+    @{ Source = 'app/Http/Controllers/Api/StudySettingsController.php'; Destination = 'app/Http/Controllers/Api/StudySettingsController.php' },
     @{ Source = 'app/Models/StudyTask.php'; Destination = 'app/Models/StudyTask.php' },
+    @{ Source = 'app/Models/FocusSession.php'; Destination = 'app/Models/FocusSession.php' },
     @{ Source = 'app/Models/StudySubject.php'; Destination = 'app/Models/StudySubject.php' },
     @{ Source = 'app/Http/Controllers/Api/StudySubjectController.php'; Destination = 'app/Http/Controllers/Api/StudySubjectController.php' },
     @{ Source = 'database/migrations/2026_10_29_000001_create_study_tasks_table.php'; Destination = 'database/migrations/2026_10_29_000001_create_study_tasks_table.php' },
     @{ Source = 'database/migrations/2026_10_30_000002_create_study_subjects_table.php'; Destination = 'database/migrations/2026_10_30_000002_create_study_subjects_table.php' },
-    @{ Source = 'database/migrations/2026_10_30_000003_add_estimated_minutes_to_study_tasks.php'; Destination = 'database/migrations/2026_10_30_000003_add_estimated_minutes_to_study_tasks.php' }
+    @{ Source = 'database/migrations/2026_10_30_041559_add_estimated_minutes_to_study_tasks_table.php'; Destination = 'database/migrations/2026_10_30_041559_add_estimated_minutes_to_study_tasks_table.php' },
+    @{ Source = 'database/migrations/2026_10_31_000001_add_planning_fields_to_study_tasks.php'; Destination = 'database/migrations/2026_10_31_000001_add_planning_fields_to_study_tasks.php' },
+    @{ Source = 'database/migrations/2026_10_31_000002_add_daily_goal_to_users_table.php'; Destination = 'database/migrations/2026_10_31_000002_add_daily_goal_to_users_table.php' },
+    @{ Source = 'database/migrations/2026_10_31_000003_create_focus_sessions_table.php'; Destination = 'database/migrations/2026_10_31_000003_create_focus_sessions_table.php' },
+    @{ Source = 'phpunit.xml'; Destination = 'phpunit.xml' }
 )
+$obsoleteEstimateMigration = Join-Path $backend 'database/migrations/2026_10_30_000003_add_estimated_minutes_to_study_tasks.php'
+if (Test-Path -LiteralPath $obsoleteEstimateMigration) {
+    Remove-Item -LiteralPath $obsoleteEstimateMigration
+}
 foreach ($item in $copyMap) {
     $target = Join-Path $backend $item.Destination
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
@@ -50,44 +61,55 @@ if ($userCode -notlike '*use Laravel\Sanctum\HasApiTokens;*') {
 if ($userCode -notmatch 'use HasApiTokens') {
     $userCode = $userCode -replace 'use HasFactory,\s*Notifiable;', 'use HasApiTokens, HasFactory, Notifiable;'
 }
-if ($userCode -notmatch 'function studySubjects\(') {
-    $subjectRelationship = @'
+if ($userCode -notmatch "'daily_goal_minutes'") {
+    $userCode = [regex]::Replace(
+        $userCode,
+        "(?m)^(\s*'password',\s*)$",
+        "`$1`r`n        'daily_goal_minutes',",
+        1
+    )
+}
+if ($userCode -notmatch "'daily_goal_minutes' => 'integer'") {
+    $userCode = [regex]::Replace(
+        $userCode,
+        "(?m)^(\s*'password' => 'hashed',\s*)$",
+        "`$1`r`n            'daily_goal_minutes' => 'integer',",
+        1
+    )
+}
+foreach ($relationship in @(
+    @{
+        Name = 'studyTasks'
+        Body = @'
+    public function studyTasks(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\StudyTask::class);
+    }
+'@
+    },
+    @{
+        Name = 'studySubjects'
+        Body = @'
     public function studySubjects(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
         return $this->hasMany(\App\Models\StudySubject::class);
     }
 '@
-    $subjectRelationship = [Environment]::NewLine + $subjectRelationship + [Environment]::NewLine
-    $userCode = [regex]::Replace($userCode, '(?m)^}\s*
-    $relationship = @'
-    public function studyTasks(): \Illuminate\Database\Eloquent\Relations\HasMany
+    },
+    @{
+        Name = 'focusSessions'
+        Body = @'
+    public function focusSessions(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
-        return $this->hasMany(\App\Models\StudyTask::class);
+        return $this->hasMany(\App\Models\FocusSession::class);
     }
 '@
-    $relationship = [Environment]::NewLine + $relationship + [Environment]::NewLine
-    $userCode = [regex]::Replace($userCode, '(?m)^}\s*$', ($relationship + '}'), 1)
-}
-[System.IO.File]::WriteAllText($userPath, $userCode, [System.Text.UTF8Encoding]::new($false))
-
-Write-Host ''
-Write-Host 'StudyOS Laravel backend source installed.' -ForegroundColor Green
-Write-Host 'Next: configure backend/.env for your MySQL database, then run:'
-Write-Host '  cd backend'
-Write-Host '  php artisan migrate'
-Write-Host '  php artisan test'
-Write-Host '  php artisan serve'
-, ($subjectRelationship + '}'), 1)
-}
-if ($userCode -notmatch 'function studyTasks\(') {
-    $relationship = @'
-    public function studyTasks(): \Illuminate\Database\Eloquent\Relations\HasMany
-    {
-        return $this->hasMany(\App\Models\StudyTask::class);
     }
-'@
-    $relationship = [Environment]::NewLine + $relationship + [Environment]::NewLine
-    $userCode = [regex]::Replace($userCode, '(?m)^}\s*$', ($relationship + '}'), 1)
+)) {
+    if ($userCode -notmatch "function $($relationship.Name)\(") {
+        $method = [Environment]::NewLine + $relationship.Body + [Environment]::NewLine
+        $userCode = [regex]::Replace($userCode, '(?m)^}', ($method + '}'), 1)
+    }
 }
 [System.IO.File]::WriteAllText($userPath, $userCode, [System.Text.UTF8Encoding]::new($false))
 
